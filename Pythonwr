@@ -1,0 +1,228 @@
+class EnhancedFibonacciTrader(FibonacciTimeSwingTrader):
+    """
+    Enhanced version with additional Fibonacci trading features
+    and improved risk management
+    """
+    
+    def __init__(self, symbol: str = "EURUSD", timeframe: int = mt5.TIMEFRAME_M15):
+        super().__init__(symbol, timeframe)
+        self.fib_time_analyzer = FibonacciTimeAnalyzer()
+        self.phase_detector = MarketPhaseDetector()
+        
+        # Enhanced parameters
+        self.harmonic_threshold = 0.6
+        self.momentum_threshold = 0.1
+        
+    def generate_enhanced_signals(self, market_data: Dict) -> Optional[Dict]:
+        """
+        Generate enhanced trading signals using advanced Fibonacci analysis
+        """
+        current_time = datetime.now()
+        temporal_harmonic = self.fib_time_analyzer.calculate_temporal_harmonic(current_time)
+        is_golden_cycle = self.fib_time_analyzer.is_golden_time_cycle(current_time)
+        
+        rates = market_data['rates']
+        highs = rates['high'].tolist()
+        lows = rates['low'].tolist()
+        closes = rates['close'].tolist()
+        
+        market_phase = self.phase_detector.detect_phase(highs, lows, 50)
+        momentum = self.phase_detector.calculate_momentum_strength(closes, 50)
+        
+        # Enhanced signal logic with harmonic convergence
+        if is_golden_cycle and abs(temporal_harmonic) > self.harmonic_threshold:
+            if (market_phase == -2 and  # Deep retracement
+                temporal_harmonic > 0 and  # Positive harmonic
+                momentum > self.momentum_threshold):  # Positive momentum
+                
+                return self.execute_enhanced_buy_trade(temporal_harmonic, momentum, market_data)
+                
+            elif (market_phase == 3 and  # Expansion phase
+                  temporal_harmonic < 0 and  # Negative harmonic
+                  momentum < -self.momentum_threshold):  # Negative momentum
+                
+                return self.execute_enhanced_sell_trade(temporal_harmonic, momentum, market_data)
+        
+        return None
+    
+    def execute_enhanced_buy_trade(self, harmonic_strength: float, momentum: float, market_data: Dict) -> Dict:
+        """Execute enhanced buy trade with harmonic-based position sizing"""
+        current_price = market_data['ask']
+        rates = market_data['rates']
+        
+        swing_data = self.detect_swing_points(rates)
+        if not swing_data:
+            return None
+        
+        atr = self.calculate_atr(rates)
+        account_balance = mt5.account_info().balance
+        
+        # Harmonic-based position sizing
+        base_risk = account_balance * self.risk_percent / 100.0
+        harmonic_multiplier = 1.0 + (abs(harmonic_strength) * 0.5)
+        adjusted_risk = base_risk * harmonic_multiplier
+        
+        stop_loss = swing_data['swing_low'] - (atr * 0.5)
+        take_profit = current_price + (abs(current_price - stop_loss) * self.risk_reward_ratio)
+        
+        lot_size = self.calculate_position_size(adjusted_risk, abs(current_price - stop_loss))
+        
+        return {
+            'type': 'ENHANCED_BUY',
+            'entry_price': current_price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'lot_size': lot_size,
+            'harmonic_strength': harmonic_strength,
+            'momentum': momentum,
+            'risk_adjustment': harmonic_multiplier
+        }
+    
+    def execute_enhanced_sell_trade(self, harmonic_strength: float, momentum: float, market_data: Dict) -> Dict:
+        """Execute enhanced sell trade with harmonic-based position sizing"""
+        current_price = market_data['bid']
+        rates = market_data['rates']
+        
+        swing_data = self.detect_swing_points(rates)
+        if not swing_data:
+            return None
+        
+        atr = self.calculate_atr(rates)
+        account_balance = mt5.account_info().balance
+        
+        # Harmonic-based position sizing
+        base_risk = account_balance * self.risk_percent / 100.0
+        harmonic_multiplier = 1.0 + (abs(harmonic_strength) * 0.5)
+        adjusted_risk = base_risk * harmonic_multiplier
+        
+        stop_loss = swing_data['swing_high'] + (atr * 0.5)
+        take_profit = current_price - (abs(current_price - stop_loss) * self.risk_reward_ratio)
+        
+        lot_size = self.calculate_position_size(adjusted_risk, abs(current_price - stop_loss))
+        
+        return {
+            'type': 'ENHANCED_SELL',
+            'entry_price': current_price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'lot_size': lot_size,
+            'harmonic_strength': harmonic_strength,
+            'momentum': momentum,
+            'risk_adjustment': harmonic_multiplier
+        }
+
+# Configuration and monitoring system
+class TradingMonitor:
+    """Monitor and analyze trading performance"""
+    
+    def __init__(self, trader: FibonacciTimeSwingTrader):
+        self.trader = trader
+        self.performance_data = []
+    
+    def log_trade_execution(self, signal: Dict, result: bool):
+        """Log trade execution details"""
+        trade_record = {
+            'timestamp': datetime.now(),
+            'signal_type': signal.get('type', 'UNKNOWN'),
+            'entry_price': signal.get('entry_price', 0),
+            'stop_loss': signal.get('stop_loss', 0),
+            'take_profit': signal.get('take_profit', 0),
+            'success': result,
+            'temporal_momentum': signal.get('temporal_momentum', 0),
+            'market_phase': signal.get('market_phase', 0)
+        }
+        self.performance_data.append(trade_record)
+    
+    def analyze_performance(self):
+        """Analyze trading performance and suggest improvements"""
+        if not self.performance_data:
+            return "No trading data available"
+        
+        successful_trades = [t for t in self.performance_data if t['success']]
+        success_rate = len(successful_trades) / len(self.performance_data)
+        
+        # Analyze which temporal momentum ranges work best
+        momentum_ranges = {}
+        for trade in successful_trades:
+            momentum = abs(trade['temporal_momentum'])
+            range_key = f"{math.floor(momentum * 10) / 10:.1f}-{math.ceil(momentum * 10) / 10:.1f}"
+            momentum_ranges[range_key] = momentum_ranges.get(range_key, 0) + 1
+        
+        best_momentum_range = max(momentum_ranges.items(), key=lambda x: x[1])[0] if momentum_ranges else "Unknown"
+        
+        return {
+            'total_trades': len(self.performance_data),
+            'success_rate': success_rate,
+            'best_momentum_range': best_momentum_range,
+            'recommendations': self.generate_recommendations()
+        }
+    
+    def generate_recommendations(self) -> List[str]:
+        """Generate trading strategy recommendations"""
+        recommendations = []
+        
+        successful_trades = [t for t in self.performance_data if t['success']]
+        if len(successful_trades) < 5:
+            recommendations.append("Insufficient data for detailed recommendations")
+            return recommendations
+        
+        # Analyze temporal momentum effectiveness
+        high_momentum_trades = [t for t in successful_trades if abs(t['temporal_momentum']) > 0.7]
+        if len(high_momentum_trades) / len(successful_trades) > 0.8:
+            recommendations.append("Consider increasing temporal momentum threshold for higher accuracy")
+        
+        # Analyze market phase effectiveness
+        deep_retracement_trades = [t for t in successful_trades if t['market_phase'] == -2]
+        if len(deep_retracement_trades) / len(successful_trades) > 0.6:
+            recommendations.append("Deep retracement phases showing strong performance - focus on these setups")
+        
+        return recommendations
+
+# Complete trading system initialization
+def initialize_complete_trading_system():
+    """Initialize the complete Fibonacci trading system"""
+    # Create enhanced trader
+    trader = EnhancedFibonacciTrader(symbol="EURUSD", timeframe=mt5.TIMEFRAME_M15)
+    
+    # Create performance monitor
+    monitor = TradingMonitor(trader)
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('fibonacci_trading.log'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    return trader, monitor
+
+# Example of running the complete system
+if __name__ == "__main__":
+    print("Fibonacci Time Swing Trading System - Python Implementation")
+    print("=" * 60)
+    
+    # Initialize system
+    trader, monitor = initialize_complete_trading_system()
+    
+    # Run demonstration
+    print("Running single analysis cycle...")
+    market_data = trader.get_current_market_data()
+    
+    if market_data:
+        # Try enhanced signals first
+        enhanced_signal = trader.generate_enhanced_signals(market_data)
+        if enhanced_signal:
+            print(f"Enhanced Signal: {enhanced_signal}")
+        else:
+            # Fall back to standard signals
+            standard_signal = trader.generate_trading_signal(market_data)
+            if standard_signal:
+                print(f"Standard Signal: {standard_signal}")
+            else:
+                print("No trading signals at this time")
+    
+    print("\nSystem ready for live trading.")
+    print("Uncomment trader.run_trading_cycle() to start automated trading.")
