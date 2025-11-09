@@ -1,0 +1,245 @@
+//+------------------------------------------------------------------+
+//|                                                  FibTimeAdvanced.mq5 |
+//|                                                                  |
+//|                                                                  |
+//+------------------------------------------------------------------+
+
+// Additional include for advanced mathematical functions
+#include <Math\Stat\Normal.mqh>
+
+// Advanced Fibonacci time analysis class
+class CFibonacciTimeAnalyzer
+{
+private:
+    double fibSequence[144];
+    double goldenRatio;
+    
+public:
+    CFibonacciTimeAnalyzer()
+    {
+        goldenRatio = (1 + MathSqrt(5)) / 2;
+        GenerateAdvancedFibonacciSequence();
+    }
+    
+    void GenerateAdvancedFibonacciSequence()
+    {
+        fibSequence[0] = 0;
+        fibSequence[1] = 1;
+        
+        for(int i = 2; i < 144; i++)
+        {
+            fibSequence[i] = fibSequence[i-1] + fibSequence[i-2];
+        }
+    }
+    
+    double CalculateTemporalHarmonic(datetime currentTime)
+    {
+        long totalMinutes = currentTime / 60;
+        double harmonicSum = 0;
+        int harmonicCount = 0;
+        
+        for(int i = 8; i < 21; i++) // Use Fibonacci numbers 21 to 10946
+        {
+            int fibNum = (int)fibSequence[i];
+            if(fibNum > 100) // Only significant numbers
+            {
+                double timePhase = (double)(totalMinutes % fibNum) / fibNum;
+                double harmonic = MathSin(timePhase * 2 * M_PI * goldenRatio);
+                harmonicSum += harmonic;
+                harmonicCount++;
+            }
+        }
+        
+        return harmonicSum / harmonicCount;
+    }
+    
+    bool IsGoldenTimeCycle(datetime currentTime, int precisionMinutes = 5)
+    {
+        long totalMinutes = currentTime / 60;
+        
+        // Check major Fibonacci time cycles
+        int majorCycles[] = {13, 21, 34, 55, 89, 144, 233, 377, 610, 987};
+        
+        for(int i = 0; i < ArraySize(majorCycles); i++)
+        {
+            if(totalMinutes % majorCycles[i] < precisionMinutes)
+                return true;
+        }
+        
+        return false;
+    }
+};
+
+// Market phase detector using Fibonacci mathematics
+class CMarketPhaseDetector
+{
+private:
+    double goldenRatio;
+    
+public:
+    CMarketPhaseDetector()
+    {
+        goldenRatio = (1 + MathSqrt(5)) / 2;
+    }
+    
+    int DetectPhase(double &highPrices[], double &lowPrices[], int period)
+    {
+        if(ArraySize(highPrices) < period || ArraySize(lowPrices) < period)
+            return 0;
+            
+        double highestHigh = highPrices[ArrayMaximum(highPrices, 0, period)];
+        double lowestLow = lowPrices[ArrayMinimum(lowPrices, 0, period)];
+        double currentPrice = highPrices[0]; // Use current high as approximation
+        
+        double range = highestHigh - lowestLow;
+        
+        if(range == 0)
+            return 0;
+            
+        // Calculate Fibonacci retracement levels
+        double fibLevels[5];
+        fibLevels[0] = highestHigh - range * 0.236; // 23.6%
+        fibLevels[1] = highestHigh - range * 0.382; // 38.2%
+        fibLevels[2] = highestHigh - range * 0.5;   // 50.0%
+        fibLevels[3] = highestHigh - range * 0.618; // 61.8%
+        fibLevels[4] = highestHigh - range * 0.786; // 78.6%
+        
+        // Determine phase based on price position relative to Fib levels
+        if(currentPrice > highestHigh)
+            return 3; // Expansion phase
+            
+        if(currentPrice < fibLevels[4])
+            return -2; // Deep retracement
+            
+        if(currentPrice < fibLevels[2])
+            return -1; // Moderate retracement
+            
+        return 1; // Neutral/consolidation
+    }
+    
+    double CalculateMomentumStrength(double &prices[], int period)
+    {
+        if(ArraySize(prices) < period)
+            return 0;
+            
+        double sum = 0;
+        for(int i = 0; i < period - 1; i++)
+        {
+            sum += prices[i] - prices[i + 1];
+        }
+        
+        double avgMomentum = sum / (period - 1);
+        double volatility = CalculateStdDev(prices, period);
+        
+        if(volatility == 0)
+            return 0;
+            
+        return avgMomentum / volatility;
+    }
+    
+private:
+    double CalculateStdDev(double &array[], int period)
+    {
+        double mean = 0;
+        for(int i = 0; i < period; i++)
+        {
+            mean += array[i];
+        }
+        mean /= period;
+        
+        double variance = 0;
+        for(int i = 0; i < period; i++)
+        {
+            variance += MathPow(array[i] - mean, 2);
+        }
+        variance /= period;
+        
+        return MathSqrt(variance);
+    }
+};
+
+// Global instances
+CFibonacciTimeAnalyzer fibTimeAnalyzer;
+CMarketPhaseDetector phaseDetector;
+
+//+------------------------------------------------------------------+
+//| Enhanced trading signal generation                              |
+//+------------------------------------------------------------------+
+void GenerateEnhancedSignals()
+{
+    double temporalHarmonic = fibTimeAnalyzer.CalculateTemporalHarmonic(TimeCurrent());
+    bool isGoldenCycle = fibTimeAnalyzer.IsGoldenTimeCycle(TimeCurrent());
+    
+    // Get price arrays for analysis
+    double highs[], lows[], closes[];
+    CopyHigh(_Symbol, _Period, 0, 50, highs);
+    CopyLow(_Symbol, _Period, 0, 50, lows);
+    CopyClose(_Symbol, _Period, 0, 50, closes);
+    
+    int marketPhase = phaseDetector.DetectPhase(highs, lows, 50);
+    double momentum = phaseDetector.CalculateMomentumStrength(closes, 50);
+    
+    // Enhanced signal logic
+    if(isGoldenCycle && MathAbs(temporalHarmonic) > 0.6)
+    {
+        if(marketPhase == -2 && temporalHarmonic > 0 && momentum > 0.1)
+        {
+            ExecuteBuyTrade(temporalHarmonic, momentum);
+        }
+        else if(marketPhase == 3 && temporalHarmonic < 0 && momentum < -0.1)
+        {
+            ExecuteSellTrade(temporalHarmonic, momentum);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced trade execution with Fibonacci position sizing         |
+//+------------------------------------------------------------------+
+void ExecuteBuyTrade(double harmonicStrength, double momentum)
+{
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double atr = CalculateATR(14);
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    
+    // Fibonacci-based position sizing
+    double baseRisk = balance * Risk_Percent / 100.0;
+    double harmonicMultiplier = 1.0 + (MathAbs(harmonicStrength) * 0.5);
+    double adjustedRisk = baseRisk * harmonicMultiplier;
+    
+    double stopLoss = currentPrice - (atr * 2.0);
+    double takeProfit = currentPrice + (MathAbs(currentPrice - stopLoss) * Risk_Reward_Ratio);
+    
+    double lotSize = CalculateLotSize(adjustedRisk, MathAbs(currentPrice - stopLoss));
+    
+    if(trade.Buy(lotSize, _Symbol, 0, stopLoss, takeProfit,
+       "EnhancedFibBuy|Harmonic:" + DoubleToString(harmonicStrength, 3) +
+       "|Momentum:" + DoubleToString(momentum, 3)))
+    {
+        Print("Enhanced BUY executed - Harmonic: ", DoubleToString(harmonicStrength, 3));
+    }
+}
+
+void ExecuteSellTrade(double harmonicStrength, double momentum)
+{
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double atr = CalculateATR(14);
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    
+    // Fibonacci-based position sizing
+    double baseRisk = balance * Risk_Percent / 100.0;
+    double harmonicMultiplier = 1.0 + (MathAbs(harmonicStrength) * 0.5);
+    double adjustedRisk = baseRisk * harmonicMultiplier;
+    
+    double stopLoss = currentPrice + (atr * 2.0);
+    double takeProfit = currentPrice - (MathAbs(currentPrice - stopLoss) * Risk_Reward_Ratio);
+    
+    double lotSize = CalculateLotSize(adjustedRisk, MathAbs(currentPrice - stopLoss));
+    
+    if(trade.Sell(lotSize, _Symbol, 0, stopLoss, takeProfit,
+       "EnhancedFibSell|Harmonic:" + DoubleToString(harmonicStrength, 3) +
+       "|Momentum:" + DoubleToString(momentum, 3)))
+    {
+        Print("Enhanced SELL executed - Harmonic: ", DoubleToString(harmonicStrength, 3));
+    }
+}
