@@ -1,0 +1,509 @@
+# Fibonacci Temporal Swing Trading Algorithm - Python Implementation
+import pandas as pd
+import numpy as np
+import MetaTrader5 as mt5
+from datetime import datetime, timedelta
+import time
+import math
+from typing import Dict, List, Tuple, Optional
+import logging
+
+class FibonacciTimeSwingTrader:
+    """
+    Advanced algorithmic trading system that combines Fibonacci time sequences
+    with swing trading principles to identify high-probability trade setups
+    based on natural mathematical market rhythms.
+    """
+    
+    def __init__(self, symbol: str = "EURUSD", timeframe: int = mt5.TIMEFRAME_M15):
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.golden_ratio = (1 + math.sqrt(5)) / 2
+        self.fib_sequence = self.generate_fibonacci_sequence(144)
+        
+        # Trading parameters
+        self.risk_percent = 2.0
+        self.max_trades = 3
+        self.risk_reward_ratio = 2.5
+        self.swing_period = 21
+        self.swing_threshold = 0.0025
+        
+        # Market state
+        self.last_swing_high = 0.0
+        self.last_swing_low = 0.0
+        self.last_swing_time = None
+        self.swing_direction = 0
+        
+        # Initialize MT5 connection
+        self.initialize_mt5()
+        
+        # Setup logging
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
+    
+    def initialize_mt5(self) -> bool:
+        """Initialize connection to MetaTrader 5"""
+        if not mt5.initialize():
+            self.logger.error("MT5 initialization failed")
+            return False
+        self.logger.info("MT5 initialized successfully")
+        return True
+    
+    def generate_fibonacci_sequence(self, n: int) -> List[int]:
+        """Generate Fibonacci sequence up to n terms"""
+        fib_sequence = [0, 1]
+        for i in range(2, n):
+            fib_sequence.append(fib_sequence[i-1] + fib_sequence[i-2])
+        return fib_sequence
+    
+    def is_fibonacci_time_cycle(self) -> bool:
+        """
+        Check if current time aligns with Fibonacci temporal cycles
+        Returns True when multiple Fibonacci time cycles converge
+        """
+        current_time = datetime.now()
+        total_minutes = int(current_time.timestamp() / 60)
+        
+        # Check primary Fibonacci cycles
+        primary_cycles = [13, 21, 34, 55, 89, 144, 233]
+        cycle_count = 0
+        
+        for cycle in primary_cycles:
+            if total_minutes % cycle == 0:
+                cycle_count += 1
+        
+        # Check Golden Ratio harmonics
+        golden_cycles = [int(cycle * self.golden_ratio) for cycle in primary_cycles]
+        for cycle in golden_cycles:
+            if total_minutes % cycle == 0:
+                cycle_count += 1
+        
+        # Significant signal requires multiple cycle convergences
+        return cycle_count >= 2
+    
+    def calculate_temporal_momentum(self) -> float:
+        """
+        Calculate temporal momentum based on Fibonacci cycle alignment
+        Returns value between -1 (strong bearish) and +1 (strong bullish)
+        """
+        current_time = datetime.now()
+        total_seconds = int(current_time.timestamp())
+        
+        momentum_sum = 0.0
+        significant_cycles = 0
+        
+        # Analyze multiple Fibonacci time cycles
+        for i in range(5, min(20, len(self.fib_sequence))):
+            fib_num = self.fib_sequence[i]
+            if fib_num > 10:  # Only significant cycles
+                time_phase = (total_seconds % fib_num) / fib_num
+                cycle_momentum = math.sin(time_phase * 2 * math.pi * self.golden_ratio)
+                momentum_sum += cycle_momentum
+                significant_cycles += 1
+        
+        return momentum_sum / significant_cycles if significant_cycles > 0 else 0.0
+    
+    def detect_swing_points(self, rates: pd.DataFrame) -> Dict:
+        """
+        Detect significant swing highs and lows in price data
+        """
+        highs = rates['high'].values
+        lows = rates['low'].values
+        
+        swing_high = highs[0]
+        swing_low = lows[0]
+        swing_high_index = 0
+        swing_low_index = 0
+        
+        # Find swing high
+        for i in range(1, min(self.swing_period, len(highs))):
+            is_swing_high = True
+            
+            # Check forward bars
+            for j in range(i + 1, min(i + (self.swing_period // 2), len(highs))):
+                if highs[j] > highs[i]:
+                    is_swing_high = False
+                    break
+            
+            # Check backward bars
+            for j in range(i - 1, max(i - (self.swing_period // 2), 0), -1):
+                if highs[j] > highs[i]:
+                    is_swing_high = False
+                    break
+            
+            if is_swing_high and highs[i] > swing_high:
+                swing_high = highs[i]
+                swing_high_index = i
+        
+        # Find swing low
+        for i in range(1, min(self.swing_period, len(lows))):
+            is_swing_low = True
+            
+            # Check forward bars
+            for j in range(i + 1, min(i + (self.swing_period // 2), len(lows))):
+                if lows[j] < lows[i]:
+                    is_swing_low = False
+                    break
+            
+            # Check backward bars
+            for j in range(i - 1, max(i - (self.swing_period // 2), 0), -1):
+                if lows[j] < lows[i]:
+                    is_swing_low = False
+                    break
+            
+            if is_swing_low and lows[i] < swing_low:
+                swing_low = lows[i]
+                swing_low_index = i
+        
+        # Calculate swing significance
+        swing_range = swing_high - swing_low
+        swing_move_percent = swing_range / swing_low if swing_low > 0 else 0
+        
+        if swing_move_percent >= self.swing_threshold:
+            # Determine swing direction
+            direction = 1 if swing_high_index < swing_low_index else -1
+            
+            return {
+                'swing_high': swing_high,
+                'swing_low': swing_low,
+                'direction': direction,
+                'range': swing_range,
+                'significance': swing_move_percent,
+                'high_time': rates.iloc[swing_high_index]['time'],
+                'low_time': rates.iloc[swing_low_index]['time']
+            }
+        
+        return None
+    
+    def calculate_market_phase(self, current_price: float, swing_data: Dict) -> int:
+        """
+        Determine current market phase based on Fibonacci retracement levels
+        """
+        if not swing_data:
+            return 0
+        
+        swing_high = swing_data['swing_high']
+        swing_low = swing_data['swing_low']
+        price_range = swing_high - swing_low
+        
+        # Calculate Fibonacci retracement levels
+        fib_levels = {
+            'fib_236': swing_high - price_range * 0.236,
+            'fib_382': swing_high - price_range * 0.382,
+            'fib_500': swing_high - price_range * 0.500,
+            'fib_618': swing_high - price_range * 0.618,
+            'fib_786': swing_high - price_range * 0.786
+        }
+        
+        # Determine market phase
+        if current_price > swing_high:
+            return 3  # Expansion phase
+        elif current_price < fib_levels['fib_786']:
+            return -2  # Deep retracement phase
+        elif current_price < fib_levels['fib_618']:
+            return -1  # Retracement phase
+        else:
+            return 1   # Neutral/consolidation phase
+    
+    def calculate_atr(self, rates: pd.DataFrame, period: int = 14) -> float:
+        """Calculate Average True Range"""
+        if len(rates) < period + 1:
+            return 0.0
+        
+        true_ranges = []
+        for i in range(1, period + 1):
+            high_low = rates.iloc[i]['high'] - rates.iloc[i]['low']
+            high_close = abs(rates.iloc[i]['high'] - rates.iloc[i-1]['close'])
+            low_close = abs(rates.iloc[i]['low'] - rates.iloc[i-1]['close'])
+            true_range = max(high_low, high_close, low_close)
+            true_ranges.append(true_range)
+        
+        return sum(true_ranges) / len(true_ranges)
+    
+    def calculate_position_size(self, risk_amount: float, stop_loss_pips: float) -> float:
+        """Calculate appropriate position size based on risk parameters"""
+        symbol_info = mt5.symbol_info(self.symbol)
+        if not symbol_info:
+            return 0.1  # Default lot size
+        
+        tick_value = symbol_info.trade_tick_value
+        tick_size = symbol_info.trade_tick_size
+        
+        if tick_size == 0 or tick_value == 0:
+            return 0.1
+        
+        risk_in_points = risk_amount / tick_value
+        points_to_sl = stop_loss_pips / tick_size
+        
+        if points_to_sl == 0:
+            return 0.1
+        
+        lots = risk_in_points / points_to_sl
+        lots = max(lots, symbol_info.volume_min)
+        lots = min(lots, symbol_info.volume_max)
+        
+        # Normalize to lot step
+        lot_step = symbol_info.volume_step
+        lots = round(lots / lot_step) * lot_step
+        
+        return lots
+    
+    def get_current_market_data(self) -> Optional[Dict]:
+        """Get current market prices and recent data"""
+        try:
+            # Get current tick
+            tick = mt5.symbol_info_tick(self.symbol)
+            if tick is None:
+                return None
+            
+            # Get recent rates
+            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 100)
+            if rates is None:
+                return None
+            
+            rates_df = pd.DataFrame(rates)
+            rates_df['time'] = pd.to_datetime(rates_df['time'], unit='s')
+            
+            return {
+                'bid': tick.bid,
+                'ask': tick.ask,
+                'last': tick.last,
+                'rates': rates_df,
+                'time': datetime.now()
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting market data: {e}")
+            return None
+    
+    def count_open_trades(self) -> int:
+        """Count currently open trades for this symbol"""
+        positions = mt5.positions_get(symbol=self.symbol)
+        return len(positions) if positions else 0
+    
+    def generate_trading_signal(self, market_data: Dict) -> Optional[Dict]:
+        """
+        Generate trading signal based on Fibonacci time cycles and swing analysis
+        """
+        if not self.is_fibonacci_time_cycle():
+            return None
+        
+        current_price = market_data['ask']  # Use ask for buy, bid for sell
+        rates = market_data['rates']
+        
+        # Detect swing points
+        swing_data = self.detect_swing_points(rates)
+        if not swing_data:
+            return None
+        
+        # Calculate market phase
+        market_phase = self.calculate_market_phase(current_price, swing_data)
+        
+        # Calculate temporal momentum
+        temporal_momentum = self.calculate_temporal_momentum()
+        
+        # Generate buy signal conditions
+        if (market_phase == -2 and  # Deep retracement
+            temporal_momentum > 0.7 and  # Strong positive temporal momentum
+            swing_data['direction'] == 1):  # Uptrend structure
+            
+            atr = self.calculate_atr(rates)
+            stop_loss = swing_data['swing_low'] - (atr * 0.5)
+            take_profit = current_price + (abs(current_price - stop_loss) * self.risk_reward_ratio)
+            
+            return {
+                'type': 'BUY',
+                'entry_price': current_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'market_phase': market_phase,
+                'temporal_momentum': temporal_momentum,
+                'swing_direction': swing_data['direction'],
+                'confidence': min(0.9, (abs(temporal_momentum) + 0.5))
+            }
+        
+        # Generate sell signal conditions
+        elif (market_phase == 3 and  # Expansion phase
+              temporal_momentum < -0.7 and  # Strong negative temporal momentum
+              swing_data['direction'] == -1):  # Downtrend structure
+            
+            atr = self.calculate_atr(rates)
+            stop_loss = swing_data['swing_high'] + (atr * 0.5)
+            take_profit = current_price - (abs(current_price - stop_loss) * self.risk_reward_ratio)
+            
+            return {
+                'type': 'SELL',
+                'entry_price': current_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'market_phase': market_phase,
+                'temporal_momentum': temporal_momentum,
+                'swing_direction': swing_data['direction'],
+                'confidence': min(0.9, (abs(temporal_momentum) + 0.5))
+            }
+        
+        return None
+    
+    def execute_trade(self, signal: Dict) -> bool:
+        """Execute trade based on generated signal"""
+        if self.count_open_trades() >= self.max_trades:
+            self.logger.info("Maximum trades reached, skipping execution")
+            return False
+        
+        # Calculate position size
+        account_balance = mt5.account_info().balance
+        risk_amount = account_balance * self.risk_percent / 100.0
+        stop_loss_distance = abs(signal['entry_price'] - signal['stop_loss'])
+        lot_size = self.calculate_position_size(risk_amount, stop_loss_distance)
+        
+        # Prepare trade request
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": lot_size,
+            "type": mt5.ORDER_TYPE_BUY if signal['type'] == 'BUY' else mt5.ORDER_TYPE_SELL,
+            "price": signal['entry_price'],
+            "sl": signal['stop_loss'],
+            "tp": signal['take_profit'],
+            "deviation": 10,
+            "magic": 202412,
+            "comment": f"FibSwing_{signal['type']}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # Execute trade
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            self.logger.error(f"Trade execution failed: {result.retcode}")
+            return False
+        
+        self.logger.info(f"Trade executed: {signal['type']} {lot_size} lots at {signal['entry_price']}")
+        self.logger.info(f"SL: {signal['stop_loss']}, TP: {signal['take_profit']}")
+        return True
+    
+    def manage_open_trades(self):
+        """Manage currently open trades with Fibonacci-based exits"""
+        positions = mt5.positions_get(symbol=self.symbol)
+        if not positions:
+            return
+        
+        current_time = datetime.now()
+        
+        for position in positions:
+            # Check Fibonacci time-based exits
+            position_time = datetime.fromtimestamp(position.time)
+            seconds_held = (current_time - position_time).total_seconds()
+            
+            # Check if position has reached Fibonacci time exit point
+            for fib_num in [13, 21, 34, 55, 89]:
+                fib_seconds = fib_num * 60  # Convert to seconds
+                if (seconds_held >= fib_seconds and 
+                    seconds_held <= fib_seconds + 300 and  # 5-minute window
+                    position.profit > 0):  # Only exit profitable trades
+                    
+                    # Close position
+                    close_request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "position": position.ticket,
+                        "symbol": self.symbol,
+                        "volume": position.volume,
+                        "type": mt5.ORDER_TYPE_BUY if position.type == 1 else mt5.ORDER_TYPE_SELL,
+                        "price": mt5.symbol_info_tick(self.symbol).bid if position.type == 1 else mt5.symbol_info_tick(self.symbol).ask,
+                        "deviation": 10,
+                        "magic": 202412,
+                        "comment": f"FibTimeExit_{fib_num}",
+                        "type_time": mt5.ORDER_TIME_GTC,
+                    }
+                    
+                    result = mt5.order_send(close_request)
+                    if result.retcode == mt5.TRADE_RETCODE_DONE:
+                        self.logger.info(f"Fibonacci time exit executed for ticket {position.ticket}")
+    
+    def run_trading_cycle(self):
+        """Main trading cycle execution"""
+        self.logger.info("Starting Fibonacci Time Swing trading cycle")
+        
+        try:
+            while True:
+                # Get current market data
+                market_data = self.get_current_market_data()
+                if not market_data:
+                    time.sleep(10)
+                    continue
+                
+                # Generate trading signal
+                signal = self.generate_trading_signal(market_data)
+                
+                if signal and signal['confidence'] > 0.7:
+                    self.logger.info(f"High-confidence signal generated: {signal['type']}")
+                    self.logger.info(f"Market Phase: {signal['market_phase']}, Temporal Momentum: {signal['temporal_momentum']:.3f}")
+                    
+                    # Execute trade
+                    self.execute_trade(signal)
+                
+                # Manage existing trades
+                self.manage_open_trades()
+                
+                # Wait before next cycle
+                time.sleep(60)  # Check every minute
+                
+        except KeyboardInterrupt:
+            self.logger.info("Trading cycle interrupted by user")
+        except Exception as e:
+            self.logger.error(f"Error in trading cycle: {e}")
+        finally:
+            mt5.shutdown()
+            self.logger.info("MT5 connection closed")
+
+# Advanced Fibonacci Analysis Classes
+class FibonacciTimeAnalyzer:
+    """Advanced Fibonacci temporal analysis"""
+    
+    def __init__(self):
+        self.golden_ratio = (1 + math.sqrt(5)) / 2
+        self.fib_sequence = self.generate_advanced_fibonacci_sequence()
+    
+    def generate_advanced_fibonacci_sequence(self) -> List[int]:
+        """Generate extended Fibonacci sequence"""
+        sequence = [0, 1]
+        for i in range(2, 144):
+            sequence.append(sequence[i-1] + sequence[i-2])
+        return sequence
+    
+    def calculate_temporal_harmonic(self, current_time: datetime) -> float:
+        """Calculate temporal harmonic convergence"""
+        total_minutes = int(current_time.timestamp() / 60)
+        harmonic_sum = 0.0
+        harmonic_count = 0
+        
+        for i in range(8, 21):  # Use Fibonacci numbers 21 to 10946
+            fib_num = self.fib_sequence[i]
+            if fib_num > 100:  # Only significant numbers
+                time_phase = (total_minutes % fib_num) / fib_num
+                harmonic = math.sin(time_phase * 2 * math.pi * self.golden_ratio)
+                harmonic_sum += harmonic
+                harmonic_count += 1
+        
+        return harmonic_sum / harmonic_count if harmonic_count > 0 else 0.0
+    
+    def is_golden_time_cycle(self, current_time: datetime, precision_minutes: int = 5) -> bool:
+        """Check if current time is within golden ratio cycle"""
+        total_minutes = int(current_time.timestamp() / 60)
+        
+        major_cycles = [13, 21, 34, 55, 89, 144, 233, 377, 610, 987]
+        
+        for cycle in major_cycles:
+            if total_minutes % cycle < precision_minutes:
+                return True
+        
+        return False
+
+class MarketPhaseDetector:
+    """Advanced market phase detection using Fibonacci mathematics"""
+    
+    def __init__(self):
+        self.golden_ratio = (1 + math.sqrt(5)) / 2
+    
+    def detect_phase(self, high_prices: List[float], low_prices: List[float], period: int) -> int:
+        """Detect market phase using Fibonacci retracement analysis"""
+        if 
