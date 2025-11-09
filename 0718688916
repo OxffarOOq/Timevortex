@@ -1,0 +1,525 @@
+//+------------------------------------------------------------------+
+//|                                  AdaptiveTimeVortexSwing.mq5 |
+//|                                                                  |
+//|                                                                  |
+//+------------------------------------------------------------------+
+#property copyright ""
+#property link      ""
+#property version   "1.00"
+
+#include <Trade\Trade.mqh>
+#include <Arrays\ArrayLong.mqh>
+
+//--- Time Vortex Parameters
+input group "=== TIME VORTEX PARAMETERS ==="
+input int Fibonacci_Sequence_Length = 144;
+input int Historical_Swing_Points = 1000;
+input double Golden_Ratio = 1.6180339887;
+input int Magic_Number = 333888;
+
+//--- ADAPTIVE RISK MANAGEMENT
+input group "=== ADAPTIVE RISK MANAGEMENT ==="
+input double Base_Risk_Percent = 1.0;          // Base risk per trade %
+input double Max_Daily_Risk = 5.0;             // Maximum daily risk %
+input bool Use_Dynamic_RR = true;              // Dynamic risk-reward ratios
+input double Min_Acceptable_RR = 0.8;          // Minimum R:R before exit
+input bool Use_Signal_Override = true;         // Close trades for new signals
+input int Max_Trade_Duration = 240;            // Max trade minutes
+
+//--- Global Variables
+CTrade trade;
+MqlRates rates[];
+long fibSequence[];
+double dailyRiskUsed = 0.0;
+double initialEquity = 0.0;
+datetime lastRiskReset = 0;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    trade.SetExpertMagicNumber(Magic_Number);
+    ArraySetAsSeries(rates, true);
+    
+    GenerateFibonacciVortexSequence();
+    InitializeRiskManagement();
+    
+    Print("=== ADAPTIVE TIME VORTEX SWING TRADER ===");
+    Print("Dynamic Risk-Reward: ", Use_Dynamic_RR);
+    Print("Signal Override: ", Use_Signal_Override);
+    Print("Max Trade Duration: ", Max_Trade_Duration, " minutes");
+    
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    if(CopyRates(_Symbol, PERIOD_M1, 0, 100, rates) < 100)
+        return;
+    
+    CheckDailyReset();
+    
+    datetime currentTime = TimeCurrent();
+    double vortexMomentum = CalculateVortexMomentum(currentTime);
+    double timeHarmonic = CalculateTimeHarmonic(currentTime);
+    double confluence = CalculateVortexConfluence(currentTime);
+    
+    // Generate new signal
+    int newSignal = GeneratePureTimeSignal(currentTime, vortexMomentum, timeHarmonic);
+    
+    // Manage existing positions first
+    ManageSwingPositions(newSignal, confluence);
+    
+    // Execute new trade if conditions met
+    if(confluence > 0.8 && newSignal != 0 && CheckRiskLimits())
+    {
+        ExecuteAdaptiveTrade(newSignal, confluence);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Manage swing positions with intelligent exits                   |
+//+------------------------------------------------------------------+
+void ManageSwingPositions(int newSignal, double newConfluence)
+{
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionGetSymbol(i) == _Symbol && PositionGetInteger(POSITION_MAGIC) == Magic_Number)
+        {
+            // Get position details
+            double currentProfit = PositionGetDouble(POSITION_PROFIT);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+            ENUM_POSITION_TYPE positionType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            datetime positionTime = (datetime)PositionGetInteger(POSITION_TIME);
+            
+            // Check if we should close this position
+            if(ShouldClosePosition(ticket, positionType, newSignal, newConfluence, 
+                                  currentProfit, positionTime, openPrice, currentPrice))
+            {
+                ClosePositionWithReason(ticket, currentProfit);
+            }
+            else
+            {
+                // Manage open position with adaptive exits
+                ManageOpenPosition(ticket, positionType, openPrice, currentPrice, currentProfit);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Determine if position should be closed                          |
+//+------------------------------------------------------------------+
+bool ShouldClosePosition(ulong ticket, ENUM_POSITION_TYPE posType, int newSignal, 
+                        double newConfluence, double currentProfit, datetime positionTime,
+                        double openPrice, double currentPrice)
+{
+    // 1. Time-based exit - maximum duration reached
+    if(TimeCurrent() - positionTime > (Max_Trade_Duration * 60))
+    {
+        return true; // Max time reached
+    }
+    
+    // 2. Signal override - new high-confluence opposite signal
+    if(Use_Signal_Override && newConfluence > 0.85)
+    {
+        if((posType == POSITION_TYPE_BUY && newSignal == -1) ||
+           (posType == POSITION_TYPE_SELL && newSignal == 1))
+        {
+            return true; // Strong opposite signal
+        }
+    }
+    
+    // 3. Wrong trade detection - rapid adverse movement
+    if(IsWrongTrade(posType, openPrice, currentPrice, positionTime))
+    {
+        return true; // Trade is clearly wrong
+    }
+    
+    // 4. Vortex momentum collapse
+    double currentConfluence = CalculateVortexConfluence(TimeCurrent());
+    double entryConfluence = GetPositionEntryConfluence(ticket);
+    
+    if(currentConfluence < entryConfluence * 0.6 && currentProfit < 0)
+    {
+        return true; // Vortex collapsed, trade losing
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Detect wrong trades early                                       |
+//+------------------------------------------------------------------+
+bool IsWrongTrade(ENUM_POSITION_TYPE posType, double openPrice, double currentPrice, datetime entryTime)
+{
+    double priceMove = MathAbs(currentPrice - openPrice) / openPrice;
+    double timeSinceEntry = (TimeCurrent() - entryTime) / 60.0; // minutes
+    
+    // Rapid adverse movement shortly after entry
+    if(timeSinceEntry < 15) // First 15 minutes
+    {
+        double adverseMove = (posType == POSITION_TYPE_BUY) ? (openPrice - currentPrice) : (currentPrice - openPrice);
+        if(adverseMove > 0 && adverseMove / openPrice > 0.002) // 0.2% adverse move
+        {
+            return true;
+        }
+    }
+    
+    // Persistent adverse movement
+    if(timeSinceEntry > 30 && priceMove > 0.005 && GetPositionProfitPercent(openPrice, currentPrice, posType) < -1.0)
+    {
+        return true;
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Manage open position with adaptive exits                       |
+//+------------------------------------------------------------------+
+void ManageOpenPosition(ulong ticket, ENUM_POSITION_TYPE posType, double openPrice, 
+                       double currentPrice, double currentProfit)
+{
+    double currentRR = CalculateCurrentRiskReward(ticket, currentPrice);
+    
+    // Close if risk-reward becomes unacceptable
+    if(currentRR < Min_Acceptable_RR && currentProfit > 0)
+    {
+        trade.PositionClose(ticket);
+        Print("Closing position: Risk-Reward dropped to ", DoubleToString(currentRR, 2));
+        return;
+    }
+    
+    // Adaptive trailing stop for profitable positions
+    if(currentProfit > 0)
+    {
+        double newStop = CalculateAdaptiveTrailingStop(ticket, posType, openPrice, currentPrice, currentProfit);
+        double currentStop = PositionGetDouble(POSITION_SL);
+        
+        if((posType == POSITION_TYPE_BUY && newStop > currentStop) ||
+           (posType == POSITION_TYPE_SELL && newStop < currentStop))
+        {
+            trade.PositionModify(ticket, newStop, PositionGetDouble(POSITION_TP));
+        }
+    }
+    
+    // Scale out partial profits on strong moves
+    if(ShouldScaleOut(ticket, posType, openPrice, currentPrice, currentProfit))
+    {
+        ScaleOutPosition(ticket);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate adaptive trailing stop                               |
+//+------------------------------------------------------------------+
+double CalculateAdaptiveTrailingStop(ulong ticket, ENUM_POSITION_TYPE posType, 
+                                   double openPrice, double currentPrice, double currentProfit)
+{
+    double initialStop = GetPositionInitialStop(ticket);
+    double riskAmount = MathAbs(openPrice - initialStop);
+    double profitRatio = currentProfit / (riskAmount * PositionGetDouble(POSITION_VOLUME) * 100000);
+    
+    // Dynamic trailing based on profit achievement
+    if(profitRatio >= 2.0) // 2x risk achieved
+    {
+        // Move to breakeven + 1/2 risk
+        if(posType == POSITION_TYPE_BUY)
+            return openPrice + (riskAmount * 0.5);
+        else
+            return openPrice - (riskAmount * 0.5);
+    }
+    else if(profitRatio >= 1.0) // 1x risk achieved
+    {
+        // Move to breakeven
+        return openPrice;
+    }
+    else if(profitRatio >= 0.5) // 0.5x risk achieved
+    {
+        // Tighten stop to 1/2 initial risk
+        if(posType == POSITION_TYPE_BUY)
+            return currentPrice - (riskAmount * 0.5);
+        else
+            return currentPrice + (riskAmount * 0.5);
+    }
+    
+    return initialStop; // No change
+}
+
+//+------------------------------------------------------------------+
+//| Execute adaptive trade without fixed reward ratio              |
+//+------------------------------------------------------------------+
+void ExecuteAdaptiveTrade(int direction, double confluence)
+{
+    if(PositionsTotal() >= GetMaxPositionCount()) return;
+    
+    double entryPrice = (direction == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) 
+                                         : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    // Adaptive position sizing based on confluence
+    double lotSize = CalculateAdaptivePositionSize(entryPrice, direction, confluence);
+    if(lotSize <= 0) return;
+    
+    // Dynamic stop loss calculation
+    double stopLoss = CalculateDynamicStopLoss(entryPrice, direction, confluence);
+    
+    // Adaptive take profit based on confluence and market conditions
+    double takeProfit = CalculateAdaptiveTakeProfit(entryPrice, direction, stopLoss, confluence);
+    
+    if(direction == 1)
+    {
+        if(trade.Buy(lotSize, _Symbol, 0, stopLoss, takeProfit,
+           "AdaptiveBuy_C" + DoubleToString(confluence, 2)))
+        {
+            RecordTradeEntry(confluence, stopLoss, takeProfit);
+            Print("ADAPTIVE BUY - Confluence: ", confluence, " SL: ", stopLoss, " TP: ", takeProfit);
+        }
+    }
+    else
+    {
+        if(trade.Sell(lotSize, _Symbol, 0, stopLoss, takeProfit,
+           "AdaptiveSell_C" + DoubleToString(confluence, 2)))
+        {
+            RecordTradeEntry(confluence, stopLoss, takeProfit);
+            Print("ADAPTIVE SELL - Confluence: ", confluence, " SL: ", stopLoss, " TP: ", takeProfit);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate adaptive take profit without fixed ratio             |
+//+------------------------------------------------------------------+
+double CalculateAdaptiveTakeProfit(double entryPrice, int direction, double stopLoss, double confluence)
+{
+    double baseDistance = MathAbs(entryPrice - stopLoss);
+    
+    // Dynamic reward ratios based on confluence
+    double rewardRatio = 1.5; // Base 1.5:1
+    
+    if(confluence > 0.9) rewardRatio = 3.0;      // Strong signal - 3:1
+    else if(confluence > 0.85) rewardRatio = 2.5; // Good signal - 2.5:1  
+    else if(confluence > 0.8) rewardRatio = 2.0;  // Moderate signal - 2:1
+    
+    // Adjust for volatility
+    double atr = CalculateATR();
+    double volatilityAdjustment = atr / (SymbolInfoDouble(_Symbol, SYMBOL_ASK) * 0.001);
+    if(volatilityAdjustment > 2.0) rewardRatio *= 0.8; // Reduce in high volatility
+    if(volatilityAdjustment < 0.5) rewardRatio *= 1.2; // Increase in low volatility
+    
+    if(direction == 1)
+        return entryPrice + (baseDistance * rewardRatio);
+    else
+        return entryPrice - (baseDistance * rewardRatio);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate dynamic stop loss                                    |
+//+------------------------------------------------------------------+
+double CalculateDynamicStopLoss(double entryPrice, int direction, double confluence)
+{
+    double atr = CalculateATR();
+    double baseStopDistance = atr * 2.0;
+    
+    // Tighter stops for higher confluence (more confidence)
+    if(confluence > 0.9) baseStopDistance *= 0.8;
+    else if(confluence > 0.85) baseStopDistance *= 0.9;
+    
+    // Ensure minimum stop distance
+    double minStop = entryPrice * 0.001; // 0.1% minimum
+    if(baseStopDistance < minStop) baseStopDistance = minStop;
+    
+    if(direction == 1)
+        return entryPrice - baseStopDistance;
+    else
+        return entryPrice + baseStopDistance;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate adaptive position size                              |
+//+------------------------------------------------------------------+
+double CalculateAdaptivePositionSize(double entryPrice, int direction, double confluence)
+{
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double baseRiskAmount = accountEquity * Base_Risk_Percent / 100.0;
+    
+    // Scale position size with confluence
+    double confluenceMultiplier = 0.7 + (confluence * 0.6); // 0.7x to 1.3x
+    double riskAmount = baseRiskAmount * confluenceMultiplier;
+    
+    double stopLoss = CalculateDynamicStopLoss(entryPrice, direction, confluence);
+    double stopDistance = MathAbs(entryPrice - stopLoss);
+    
+    if(stopDistance <= 0) return 0.01;
+    
+    double pointValue = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    
+    if(pointValue == 0 || tickValue == 0) return 0.01;
+    
+    double stopPoints = stopDistance / pointValue;
+    double lotSize = riskAmount / (stopPoints * pointValue * tickValue);
+    
+    // Apply broker constraints
+    lotSize = MathMax(lotSize, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
+    lotSize = MathMin(lotSize, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX));
+    
+    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    lotSize = MathRound(lotSize / lotStep) * lotStep;
+    
+    return lotSize;
+}
+
+//+------------------------------------------------------------------+
+//| Scale out of profitable positions                              |
+//+------------------------------------------------------------------+
+void ScaleOutPosition(ulong ticket)
+{
+    double volume = PositionGetDouble(POSITION_VOLUME);
+    if(volume > SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN) * 2)
+    {
+        double closeVolume = volume * 0.5; // Close half
+        trade.PositionClosePartial(ticket, closeVolume);
+        Print("Scaled out 50% of position: ", ticket);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check if should scale out                                      |
+//+------------------------------------------------------------------+
+bool ShouldScaleOut(ulong ticket, ENUM_POSITION_TYPE posType, double openPrice, 
+                   double currentPrice, double currentProfit)
+{
+    double initialStop = GetPositionInitialStop(ticket);
+    double riskAmount = MathAbs(openPrice - initialStop);
+    double profitMultiple = currentProfit / (riskAmount * PositionGetDouble(POSITION_VOLUME) * 100000);
+    
+    // Scale out at 1.5x risk achieved
+    return (profitMultiple >= 1.5);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate current risk-reward ratio                           |
+//+------------------------------------------------------------------+
+double CalculateCurrentRiskReward(ulong ticket, double currentPrice)
+{
+    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+    double stopLoss = PositionGetDouble(POSITION_SL);
+    double takeProfit = PositionGetDouble(POSITION_TP);
+    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    
+    double risk = MathAbs(openPrice - stopLoss);
+    double potentialReward = 0;
+    
+    if(posType == POSITION_TYPE_BUY)
+    {
+        potentialReward = takeProfit > 0 ? takeProfit - currentPrice : currentPrice - openPrice;
+    }
+    else
+    {
+        potentialReward = takeProfit > 0 ? currentPrice - takeProfit : openPrice - currentPrice;
+    }
+    
+    return (risk > 0) ? potentialReward / risk : 0;
+}
+
+//+------------------------------------------------------------------+
+//| Close position with reason logging                            |
+//+------------------------------------------------------------------+
+void ClosePositionWithReason(ulong ticket, double profit)
+{
+    string reason = "Unknown";
+    double currentProfit = PositionGetDouble(POSITION_PROFIT);
+    
+    if(profit < 0) reason = "Wrong Trade Detection";
+    else if(TimeCurrent() - (datetime)PositionGetInteger(POSITION_TIME) > (Max_Trade_Duration * 60))
+        reason = "Max Duration Reached";
+    else
+        reason = "Signal Override";
+    
+    trade.PositionClose(ticket);
+    Print("Position Closed - Reason: ", reason, " P/L: ", DoubleToString(currentProfit, 2));
+}
+
+//+------------------------------------------------------------------+
+//| Helper functions                                               |
+//+------------------------------------------------------------------+
+double CalculateATR()
+{
+    double atr = 0;
+    int lookback = MathMin(14, ArraySize(rates));
+    for(int i = 0; i < lookback - 1; i++)
+    {
+        double trueRange = MathMax(rates[i].high, rates[i+1].close) - MathMin(rates[i].low, rates[i+1].close);
+        atr += trueRange;
+    }
+    return (lookback > 1) ? atr / (lookback - 1) : 0;
+}
+
+double GetPositionEntryConfluence(ulong ticket)
+{
+    // Would retrieve from stored trade data
+    return 0.8; // Default
+}
+
+double GetPositionInitialStop(ulong ticket)
+{
+    // Would retrieve from stored trade data  
+    return PositionGetDouble(POSITION_SL); // Fallback
+}
+
+double GetPositionProfitPercent(double openPrice, double currentPrice, ENUM_POSITION_TYPE posType)
+{
+    if(posType == POSITION_TYPE_BUY)
+        return (currentPrice - openPrice) / openPrice * 100.0;
+    else
+        return (openPrice - currentPrice) / openPrice * 100.0;
+}
+
+void RecordTradeEntry(double confluence, double stopLoss, double takeProfit)
+{
+    // Record trade entry for later reference
+}
+
+int GetMaxPositionCount()
+{
+    return 3; // Maximum 3 concurrent positions
+}
+
+bool CheckRiskLimits()
+{
+    return (dailyRiskUsed < Max_Daily_Risk);
+}
+
+void CheckDailyReset()
+{
+    MqlDateTime currentTime, lastReset;
+    TimeToStruct(TimeCurrent(), currentTime);
+    TimeToStruct(lastRiskReset, lastReset);
+    
+    if(currentTime.day != lastReset.day)
+    {
+        dailyRiskUsed = 0.0;
+        lastRiskReset = TimeCurrent();
+    }
+}
+
+void InitializeRiskManagement()
+{
+    initialEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    lastRiskReset = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Time Vortex Core Functions (from previous implementation)      |
+//+------------------------------------------------------------------+
+void GenerateFibonacciVortexSequence()
+{
+    ArrayResize(fibSequence, Fibonacci_Sequence_Length);
+    fibSequence[0
