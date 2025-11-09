@@ -1,0 +1,153 @@
+//+------------------------------------------------------------------+
+//|                                            TimeVortexMath.mq5 |
+//|                                                                 |
+//|                                                                 |
+//+------------------------------------------------------------------+
+
+// Advanced time vortex mathematical functions
+
+//+------------------------------------------------------------------+
+//| Calculate vortex field intensity                                |
+//+------------------------------------------------------------------+
+double CalculateVortexFieldIntensity(datetime currentTime)
+{
+    double intensity = 0.0;
+    
+    // Analyze temporal density around current time
+    long currentSeconds = currentTime;
+    long analysisWindow = 3600; // 1-hour window
+    
+    for(int i = 0; i < ArraySize(timeVortexField); i++)
+    {
+        long timeDiff = MathAbs(currentSeconds - (long)timeVortexField[i][0]);
+        if(timeDiff < analysisWindow)
+        {
+            double temporalDensity = 1.0 - (double)timeDiff / analysisWindow;
+            intensity += timeVortexField[i][1] * temporalDensity;
+        }
+    }
+    
+    return MathMin(intensity, 1.0);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Fibonacci time spiral                                 |
+//+------------------------------------------------------------------+
+double CalculateFibonacciTimeSpiral(datetime currentTime)
+{
+    long totalMinutes = currentTime / 60;
+    double spiralValue = 0.0;
+    
+    // Golden angle in radians (137.5 degrees)
+    double goldenAngle = 2.399963; // radians
+    
+    for(int i = 3; i < MathMin(21, Fibonacci_Sequence_Length); i++)
+    {
+        long fibNum = fibSequence[i];
+        if(fibNum > 8)
+        {
+            double spiralPhase = (double)(totalMinutes % fibNum) / fibNum;
+            double spiralPoint = MathSin(spiralPhase * 2 * M_PI * Golden_Ratio + goldenAngle);
+            spiralValue += spiralPoint;
+        }
+    }
+    
+    return spiralValue / 18.0; // Normalize
+}
+
+//+------------------------------------------------------------------+
+//| Calculate temporal resonance                                    |
+//+------------------------------------------------------------------+
+double CalculateTemporalResonance(datetime currentTime)
+{
+    long currentSeconds = currentTime;
+    double resonance = 0.0;
+    int resonanceCount = 0;
+    
+    // Check resonance with historical vortex nodes
+    for(int i = 0; i < ArraySize(timeVortexField); i++)
+    {
+        long historicalTime = (long)timeVortexField[i][0];
+        long timeDifference = MathAbs(currentSeconds - historicalTime);
+        
+        // Check for Fibonacci time relationships
+        for(int j = 5; j < MathMin(34, Fibonacci_Sequence_Length); j++)
+        {
+            long fibTime = fibSequence[j] * 60; // Convert to seconds
+            if(fibTime > 0 && timeDifference % fibTime == 0)
+            {
+                double resonanceStrength = (double)fibSequence[j] / 233.0; // Normalize to Fibonacci 233
+                resonance += resonanceStrength * timeVortexField[i][1];
+                resonanceCount++;
+            }
+        }
+    }
+    
+    return (resonanceCount > 0) ? resonance / resonanceCount : 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate vortex phase alignment                                |
+//+------------------------------------------------------------------+
+double CalculateVortexPhaseAlignment(datetime currentTime)
+{
+    long totalSeconds = currentTime;
+    double alignment = 0.0;
+    int phaseCount = 0;
+    
+    // Multiple Fibonacci time cycles
+    int phaseCycles[] = {13, 21, 34, 55, 89, 144};
+    
+    for(int i = 0; i < ArraySize(phaseCycles); i++)
+    {
+        long cycleSeconds = phaseCycles[i] * 60;
+        double cyclePhase = (double)(totalSeconds % cycleSeconds) / cycleSeconds;
+        
+        // Phase alignment at key Fibonacci ratios
+        double targetPhases[] = {0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0};
+        
+        for(int j = 0; j < ArraySize(targetPhases); j++)
+        {
+            double phaseDistance = MathAbs(cyclePhase - targetPhases[j]);
+            if(phaseDistance < 0.05) // Within 5% of target phase
+            {
+                alignment += 1.0 - (phaseDistance / 0.05);
+                phaseCount++;
+            }
+        }
+    }
+    
+    return (phaseCount > 0) ? alignment / phaseCount : 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced time vortex signal generation                          |
+//+------------------------------------------------------------------+
+int GenerateEnhancedTimeSignal(datetime currentTime)
+{
+    // Calculate advanced time vortex metrics
+    double fieldIntensity = CalculateVortexFieldIntensity(currentTime);
+    double timeSpiral = CalculateFibonacciTimeSpiral(currentTime);
+    double temporalResonance = CalculateTemporalResonance(currentTime);
+    double phaseAlignment = CalculateVortexPhaseAlignment(currentTime);
+    
+    // Composite vortex score
+    double vortexScore = (fieldIntensity * 0.25) + 
+                        (MathAbs(timeSpiral) * 0.25) + 
+                        (temporalResonance * 0.25) + 
+                        (phaseAlignment * 0.25);
+    
+    if(vortexScore < 0.9) return 0; // Ultra-high threshold
+    
+    // Direction based on time spiral phase
+    if(timeSpiral > 0.5 && fieldIntensity > 0.7)
+    {
+        return 1; // BUY - Expanding time vortex
+    }
+    else if(timeSpiral < -0.5 && fieldIntensity > 0.7)
+    {
+        return -1; // SELL - Contracting time vortex
+    }
+    
+    return 0;
+}
